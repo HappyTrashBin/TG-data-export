@@ -4,7 +4,7 @@ from opentele2.exception import TFileNotFound
 from telethon.sync import TelegramClient
 from telethon.network.connection import ConnectionTcpMTProxyRandomizedIntermediate
 from telethon.errors.rpcerrorlist import FloodWaitError
-import argparse, asyncio, os, logging, dotenv
+import argparse, asyncio, os, logging, dotenv, random
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -66,7 +66,10 @@ def setup_logger(in_file: bool = True, is_quiet: bool = False) -> logging.Logger
     return some_logger
 
 
-async def create_session(tdata_folder: str, session_file: str, connection_timeout: int) -> None:
+async def create_session(tdata_folder: str,
+                         session_file: str,
+                         connection_timeout: int,
+                         proxy_data: tuple) -> None:
     """
     Создание файла сессии, который используется при подключении к серверам Telegram в библиотеке telethon
     из содержимого папки tdata
@@ -75,14 +78,19 @@ async def create_session(tdata_folder: str, session_file: str, connection_timeou
         tdata_folder: путь до папки tdata
         session_file: файл сессии
         connection_timeout: время таймаута при подключении к серверам Telegram
+        proxy_data: набор параметров для подключения к прокси - (ip, port, secret)
     """
     try:
         tg_desktop_instance = TDesktop(tdata_folder)
-        api = API.TelegramIOS.Generate()
-        await asyncio.wait_for(
+
+        api = random.choice([API.TelegramDesktop.Generate,
+                             API.TelegramIOS.Generate,
+                             API.TelegramAndroid.Generate,
+                             API.TelegramMacOS.Generate])()
+        tg_client = await asyncio.wait_for(
             tg_desktop_instance.ToTelethon(session_file, CreateNewSession, api,
-                                           # connection=ConnectionTcpMTProxyRandomizedIntermediate,
-                                           # proxy=proxy
+                                           connection=ConnectionTcpMTProxyRandomizedIntermediate,
+                                           proxy=proxy_data
                                            ),
             timeout=connection_timeout
         )
@@ -96,6 +104,8 @@ async def create_session(tdata_folder: str, session_file: str, connection_timeou
         logger.error('Ошибка, Telegram блокирует подключение из-за прошлых неуспешных попыток, нужно подождать 1 час')
         logger.info('При следующей попытке лучше включить флаг -r\n')
         exit(-1)
+    finally:
+        await tg_client.disconnect()
     logger.info(f'Создан файл сессии {session_file}')
 
 
@@ -140,7 +150,8 @@ async def main(some_arguments: argparse.Namespace,
         logger.info('Создаётся новый файл формата Telegram сессии')
         await create_session(tdata_folder=some_arguments.TDATA_FOLDER,
                              session_file=some_arguments.SESSION_FILE,
-                             connection_timeout=some_arguments.TIMEOUT)
+                             connection_timeout=some_arguments.TIMEOUT,
+                             proxy_data=some_proxy)
 
     # Создание экзепляра объекта TelegramClient с использованием TG API и прокси
     # (при написании использовался TG WS Proxy, с ним всё работает, остальное не факт)
