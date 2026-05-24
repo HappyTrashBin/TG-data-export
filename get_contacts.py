@@ -128,7 +128,7 @@ async def get_contacts(tg_client: TelegramClient, is_json: bool) -> str:
             if contact.entity.username:
                 contact_username = f'@{contact.entity.username}'
         # Если нужно изменить состав полей, то достаточно изменить строку ниже, остальные структуры функции адаптируются
-        # Можно добавлять или убирать любые поля, например:
+        # Можно добавлять, переставлять или убирать любые поля, например:
         #                                                  'Folder': contact.folder_id
         entry = {'Type': type(contact.entity).__name__,
                  'Username': contact_username,
@@ -139,6 +139,7 @@ async def get_contacts(tg_client: TelegramClient, is_json: bool) -> str:
         contacts[contact.id] = entry
         # Путь до описания класса message, экзепляры которого итерируются в tg_client.iter_dialogs():
         # ./venv/Lib/site-packeges/telethon/tl/custom/dialog.py
+        # тут можно подсмотреть дополнительные поля для добавления их в entry
 
     # Формирование вывода
     data: str = ''
