@@ -4,7 +4,7 @@ from telethon.errors.rpcerrorlist import FloodWaitError
 from telethon.tl.custom import message
 from telethon.tl import types
 from datetime import datetime, timedelta
-import argparse, asyncio, os, logging, dotenv, json, zoneinfo, textwrap
+import argparse, asyncio, os, logging, dotenv, json, zoneinfo, textwrap, colorama, urlextract, re
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -17,7 +17,8 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
         args_line: список аргументов формата ['-X', '...']
     """
     parser = argparse.ArgumentParser(description='Скрипт для выгрузки переписок с контактами с аккаунта Telegram',
-                                     add_help=False)
+                                     add_help=False,
+                                     formatter_class=argparse.RawTextHelpFormatter)
 
     parser.add_argument('-h',
                         action='help', default=argparse.SUPPRESS,
@@ -44,11 +45,12 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
                         type=str, dest='TIMEZONE',
                         help='Часовой пояс, влияет на временные метки у выгруженных сообщений (default=Время системы)')
     parser.add_argument('-fl',
-                        type=int, default=1048576, dest='FILE_LIMIT',
-                        help='Максимальный размер файлов в байтах, которые скрипт будет выгружать (default=1048576)')
+                        type=str, default='1024K', dest='FILE_LIMIT',
+                        help='Максимальный размер файлов, которые скрипт будет выгружать (default=1024K), примеры:\n'
+                             '- 1024 (Байты)\n- 1024K (Килобайты)\n- 1024M (Мегабайты)\n- 1024T (Терабайты)')
     parser.add_argument('-d',
                         type=str, dest='DOWNLOADS', nargs='?', const='', default=None,
-                        help='Скачивать медиа объекты из переписок. По умолчанию создаётся папка downloads '
+                        help='Скачивать медиа объекты из переписок. По умолчанию создаётся папка downloads\n'
                              'в месте расположения скрипта. Можно также указать свой путь, он не будет создан')
 
     parser.add_argument('CONTACT_IDENTIFIER',
@@ -169,10 +171,56 @@ def get_contact_info(contact: types.User | types.Chat | types.Channel) -> dict:
     return info
 
 
+def formated_size_to_bytes(string_file_size: str) -> int:
+    """
+    Преобразование строки формата 10/10K/10M/10T в целое число байт
+
+    Args:
+        string_file_size: форматированная строка
+    """
+    modifier = 0
+
+    if string_file_size[-1].isalpha():
+        if string_file_size[-1] in ['K', 'M', 'T']:
+            modifier = ['K', 'M', 'T'].index(string_file_size[-1]) + 1
+            string_file_size = string_file_size[:-1]
+        else:
+            logger.error(f'Неверно указан предельный размер файлов: {string_file_size}')
+            exit(-1)
+
+    if not string_file_size.isdigit():
+        logger.error(f'Неверно указан предельный размер файлов: {string_file_size}')
+        exit(-1)
+
+    return int(string_file_size) * 1024 ** modifier
+
+
+def bytes_to_formated_size(int_file_size: int) -> str:
+    """
+    Преобразование целого числа байт в строку формата 10/10K/10M/10T
+
+    Args:
+        int_file_size: целое число байт
+    """
+    step = 1024
+    modifier = 0
+
+    while True:
+        result = int_file_size / step
+        if result > 0.5:
+            int_file_size = result
+            modifier += 1
+        else:
+            break
+
+    letter = ['', 'K', 'M', 'T'][modifier]
+    return f'{round(int_file_size, 2)}{letter}'
+
+
 async def download_media(tg_client: TelegramClient,
                          dialog_message: message,
                          download_path: str,
-                         file_limit: int) -> str:
+                         file_limit: str) -> str | None:
     """
     Скачивание файловых вложений из предоставленного объекта сообщения
 
@@ -190,32 +238,31 @@ async def download_media(tg_client: TelegramClient,
         logger.error(f'Указанный путь {download_path} не существует')
         exit(-1)
 
-    filename = f'{dialog_message.date.strftime("%Y%m%d_%H%M%S")}_{dialog_message.id}'
-    try:
-        filesize = dialog_message.media.document.size
-    except AttributeError:
-        filesize = 0
+    filename = dialog_message.file.name
+    filename = f'{dialog_message.date.strftime("%Y%m%d_%H%M%S")}_{dialog_message.id}_{str(filename)}'
 
-    if filesize > file_limit:
-        return f'file too large {filesize}'
+    filesize = dialog_message.file.size
+    if filesize > formated_size_to_bytes(file_limit):
+        return f'file too large - {bytes_to_formated_size(filesize)}bytes'
 
-    file_already_exists = None
+    file_full_path = None
     for item in os.listdir(download_path):
+        full_path = os.path.join(download_path, item)
         if filename == os.path.splitext(item)[0]:
-            file_already_exists = os.path.join(download_path, item)
+            file_full_path = full_path
             break
 
-    if not file_already_exists:
-        file_already_exists = await tg_client.download_media(dialog_message, file=os.path.join(download_path, filename))
+    if not file_full_path:
+        file_full_path = await tg_client.download_media(dialog_message, file=os.path.join(download_path, filename))
 
-    return file_already_exists
+    return file_full_path
 
 
 async def get_dialog(tg_client: TelegramClient,
                      contact_identifier: str,
                      messages_limit: int,
                      is_json: bool,
-                     file_limit: int,
+                     file_limit: str,
                      download_path: None | str,
                      timezone: str = None) -> str:
     """
@@ -274,18 +321,22 @@ async def get_dialog(tg_client: TelegramClient,
 
     async for dialog_message in tg_client.iter_messages(contact, limit=messages_limit):
         # Обработка возможных вложений в сообщении
-        if dialog_message.media and download_path is not None:  # Есть вложение, и указан флаг -d
-            filename = await download_media(tg_client, dialog_message, download_path, file_limit)
-        elif dialog_message.media and download_path is None:  # Есть вложение, но не указан флаг -d
-            filename = True
-        elif not dialog_message.media and download_path is not None:  # Нет вложения, и указан флаг -d
+        if not type(dialog_message.media).__name__ == 'MessageMediaWebPage':
+            if dialog_message.media and download_path is not None:  # Есть вложение, и указан флаг -d
+                filename = await download_media(tg_client, dialog_message, download_path, file_limit)
+            elif dialog_message.media and download_path is None:  # Есть вложение, но не указан флаг -d
+                filename = True
+            elif not dialog_message.media and download_path is not None:  # Нет вложения, и указан флаг -d
+                filename = None
+            elif not dialog_message.media and download_path is None:  # Нет вложения, но не указан флаг -d
+                filename = False
+        else:
             filename = None
-        elif not dialog_message.media and download_path is None:  # Нет вложения, но не указан флаг -d
-            filename = False
 
         message_date = (dialog_message.date + change_timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
         # Если нужно изменить состав полей, то достаточно изменить строку ниже, остальные структуры функции адаптируются
-        # Можно добавлять или убирать любые поля, КРОМЕ 'sender' и 'text', они прописаны в форматировании таблицы
+        # Можно добавлять, переставлять или убирать любые поля,
+        # КРОМЕ 'sender' и 'text', они прописаны в форматировании таблицы
         entry = {'date': message_date,
                  # Telethon выгружает сообщения в ублюдском формате и зачем-то парсит отправителя в разные поля
                  # в зависимости от того, входящее сообщение или исходящее. Чтобы не плясать лишний раз с бубном
@@ -298,6 +349,7 @@ async def get_dialog(tg_client: TelegramClient,
         dialog['messages'].append({dialog_message.id: entry})
         # Путь до описания класса message, экзепляры которого итерируются в tg_client.iter_messages():
         # ./venv/Lib/site-packeges/telethon/tl/custom/message.py
+        # тут можно подсмотреть дополнительные поля для добавления их в entry
 
     # Изменение порядка сообщений, в выгрузке сообщения идут так: последнее, предпоследнее и т.д.
     # Читать сообщения в таком порядке придётся снизу вверх, чтобы соблюдать хронологию. Это неудобно
@@ -305,7 +357,6 @@ async def get_dialog(tg_client: TelegramClient,
     dialog['messages'] = reversed_messages
 
     # Формирование вывода
-    data: str = ''
     if is_json:
         data = json.dumps(obj=dialog, indent=4, ensure_ascii=False)
     else:
@@ -336,7 +387,7 @@ async def get_dialog(tg_client: TelegramClient,
                     sizes[position] = field_value_len
 
         # Функция для форматирования заголовка, содержащего данные контакта или отправителя сообщения
-        def title_formating(some_dict: dict):
+        def title_formating(some_dict: dict) -> str:
             title = ' '
             for number, field in enumerate(list(some_dict.keys())):
                 segment = f'{field}: {some_dict[field]}'
@@ -345,34 +396,69 @@ async def get_dialog(tg_client: TelegramClient,
                     title += '| '
             return title
 
+        colorama.init()
+
+        # Функция для выделения текста зелёным (если он True или не None) или красным (если он False или None)
+        def colored_string(some_string: str | None | bool) -> str:
+            if some_string:
+                return colorama.Fore.LIGHTGREEN_EX + str(some_string) + colorama.Fore.RESET
+            else:
+                return colorama.Fore.LIGHTRED_EX + str(some_string) + colorama.Fore.RESET
+
+        # Функция для выделения синим ссылок в тексте
+        def colored_links_in_text(some_text: str) -> str:
+            extractor = urlextract.URLExtract()
+            urls = extractor.find_urls(some_text)
+            for url in urls:
+                some_text = some_text.replace(url, colorama.Fore.LIGHTBLUE_EX + url + colorama.Fore.RESET)
+            return some_text
+
+        # Функция для форматирования текста - добавления отступов и ограничения по длине строке
+        def formated_text(some_text: str, some_size: int, indent_offset: int) -> str:
+            lines = some_text.split('\n')
+            new_text = ''
+            for number, line in enumerate(lines):
+                if line:
+                    filled = textwrap.fill(colored_links_in_text(line), width=some_size - indent_offset)
+                    result = textwrap.indent(filled, indent_offset * ' ')
+                    new_text += result
+                if number < len(lines) - 1:
+                    new_text += '\n'
+            return new_text
+
         # Заголовок
-        data += 'ВЫГРУЗКА КОНТАКТА:' + '\n' * 2
         title_string = title_formating(dialog['contact_info'])
         message_size = len(title_string)
         delimiter = '-' * message_size
-        data += title_string + '\n'
+
+        data = []
+        data.append(colorama.Back.WHITE + colorama.Fore.BLACK +
+                    f'{"ВЫГРУЗКА КОНТАКТА:":<{message_size}}' +
+                    colorama.Back.RESET + colorama.Fore.RESET +
+                    '\n' * 2)
+        data.append(title_string + '\n')
 
         # Строки
-        data += '\n' + 'СООБЩЕНИЯ:' + '\n'
+        data.append('\n' + colorama.Back.WHITE + colorama.Fore.BLACK +
+                    f'{"СООБЩЕНИЯ:":<{message_size}}' +
+                    colorama.Back.RESET + colorama.Fore.RESET + '\n')
         dialog_dict_path = dialog['messages']
         for dialog_message in dialog_dict_path:
             key_value = dialog_message[list(dialog_message.keys())[0]]
-            data += '\n' + title_formating(key_value['sender']) + '\n'
-            data += delimiter + '\n'
-            data += f'Date: {key_value["date"]}' + '\n'
-            data += f'Have media: {key_value["media"]}' + '\n'
-            data += f'Is forwarded: {key_value["is_forwarded"]}' + '\n'
-            data += 'Text:'
+            data.append('\n' + title_formating(key_value['sender']) + '\n')
+            data.append(delimiter + '\n')
+            data.append(f'Date: {key_value["date"]}' + '\n')
+            data.append(f'Have media: {colored_string(key_value["media"])}' + '\n')
+            data.append(f'Is forwarded: {colored_string(key_value["is_forwarded"])}' + '\n')
+            data.append('Text:')
             if key_value["text"]:
-                offset = 5
-                filled = textwrap.fill(key_value["text"], width=message_size - offset)
-                result = textwrap.indent(filled, offset * " ")
-                data += '\n' + result
+                offset = len('Text:')  # 5 знаков для отступа
+                data.append('\n' + formated_text(key_value["text"], message_size, offset))
             else:
-                data += ' None'
-            data += '\n'
+                data.append(' ' + colored_string(None))
+            data.append('\n')
 
-    return data
+    return ''.join(data)
 
 
 async def main(some_arguments: argparse.Namespace,
@@ -381,38 +467,43 @@ async def main(some_arguments: argparse.Namespace,
                some_proxy: tuple) -> None:
     logger.info('Скрипт запущен')
 
-    # При отсутствии файла Telegram сессии скрипт прерывается
-    if os.path.exists(some_arguments.SESSION_FILE):
-        logger.info(f'Используется сессия {some_arguments.SESSION_FILE}')
-    else:
-        logger.error(f'Не найден файл сессии {some_arguments.SESSION_FILE}, используйте скрипт create_session.py')
+    try:
+        # При отсутствии файла Telegram сессии скрипт прерывается
+        if os.path.exists(some_arguments.SESSION_FILE):
+            logger.info(f'Используется сессия {some_arguments.SESSION_FILE}')
+        else:
+            logger.error(f'Не найден файл сессии {some_arguments.SESSION_FILE}, используйте скрипт create_session.py')
+            exit(-1)
+
+        # Создание экзепляра объекта TelegramClient с использованием TG API и прокси
+        # (при написании использовался TG WS Proxy, с ним всё работает, остальное не факт)
+        client = TelegramClient(some_arguments.SESSION_FILE, int(some_api_id), some_api_hash,
+                                connection=ConnectionTcpMTProxyRandomizedIntermediate,
+                                proxy=some_proxy)
+
+        await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
+
+        result = await get_dialog(tg_client=client,
+                                  contact_identifier=some_arguments.CONTACT_IDENTIFIER,
+                                  messages_limit=some_arguments.LIMIT,
+                                  is_json=some_arguments.JSON,
+                                  file_limit=some_arguments.FILE_LIMIT,
+                                  download_path=some_arguments.DOWNLOADS,
+                                  timezone=some_arguments.TIMEZONE)
+
+        # Вывод result в консоль или в файл
+        if some_arguments.FILE_NAME:
+            file_name = some_arguments.FILE_NAME
+            result = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])').sub('', result)
+            with open(file=file_name, mode='w', encoding='utf-8') as some_file:
+                some_file.write(result)
+        else:
+            print(result)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        await client.disconnect()
+        logger.error('Скрипт прерван вручную (Ctrl-C)\n')
         exit(-1)
-
-    # Создание экзепляра объекта TelegramClient с использованием TG API и прокси
-    # (при написании использовался TG WS Proxy, с ним всё работает, остальное не факт)
-    client = TelegramClient(some_arguments.SESSION_FILE, int(some_api_id), some_api_hash,
-                            connection=ConnectionTcpMTProxyRandomizedIntermediate,
-                            proxy=some_proxy)
-
-    await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
-
-    result = await get_dialog(tg_client=client,
-                              contact_identifier=some_arguments.CONTACT_IDENTIFIER,
-                              messages_limit=some_arguments.LIMIT,
-                              is_json=some_arguments.JSON,
-                              file_limit=some_arguments.FILE_LIMIT,
-                              download_path=some_arguments.DOWNLOADS,
-                              timezone=some_arguments.TIMEZONE)
-
-    # Вывод result в консоль или в файл
-    if some_arguments.FILE_NAME:
-        file_name = some_arguments.FILE_NAME
-        with open(file=file_name, mode='w', encoding='utf-8') as some_file:
-            some_file.write(result)
-    else:
-        print(result)
-
-    # Завершение соединения
+        # Завершение соединения
     await client.disconnect()
     logger.info('Скрипт успешно завершён\n')
 
@@ -433,6 +524,7 @@ arguments = args_parse()
 logger = setup_logger(in_file=False, is_quiet=arguments.QUIET)
 
 # Запуска основной функции
+
 asyncio.run(
     main(some_arguments=arguments, some_api_id=api_id, some_api_hash=api_hash, some_proxy=proxy)
 )
