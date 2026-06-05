@@ -1,4 +1,4 @@
-# TG data export without auth
+# TG data export
 
 Репозиторий содержит набор Python скриптов, которые выполняют следующее:
 - create_session.py - конвертирует данные локальной папки tdata (используется в Telegram Desktop) в файл формата .session, который используется библиотекой Telethon для подключения к серверам Telegram (также требуются параметры API id и API hash)
