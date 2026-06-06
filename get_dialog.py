@@ -41,6 +41,13 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
     parser.add_argument('-l',
                         type=int, default=10, dest='LIMIT',
                         help='Количество последних сообщений контакта для выгрузки (default=10)')
+    parser.add_argument('-d',
+                        type=str, dest='DOWNLOADS', nargs='?', const='', default=None,
+                        help='Скачивать медиа объекты из переписок. По умолчанию создаётся папка downloads\n'
+                             'в месте расположения скрипта. Можно также указать свой путь, он не будет создан')
+    parser.add_argument('-o',
+                        type=int, default=0, dest='OFFSET',
+                        help='Смещение от последнего сообщения (default=0)')
     parser.add_argument('-tz',
                         type=str, dest='TIMEZONE',
                         help='Часовой пояс, влияет на временные метки у выгруженных сообщений (default=Время системы)')
@@ -48,10 +55,6 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
                         type=str, default='1024K', dest='FILE_LIMIT',
                         help='Максимальный размер файлов, которые скрипт будет выгружать (default=1024K), примеры:\n'
                              '- 1024 (Байты)\n- 1024K (Килобайты)\n- 1024M (Мегабайты)\n- 1024T (Терабайты)')
-    parser.add_argument('-d',
-                        type=str, dest='DOWNLOADS', nargs='?', const='', default=None,
-                        help='Скачивать медиа объекты из переписок. По умолчанию создаётся папка downloads\n'
-                             'в месте расположения скрипта. Можно также указать свой путь, он не будет создан')
 
     parser.add_argument('CONTACT_IDENTIFIER',
                         type=str,
@@ -261,6 +264,7 @@ async def download_media(tg_client: TelegramClient,
 async def get_dialog(tg_client: TelegramClient,
                      contact_identifier: str,
                      messages_limit: int,
+                     messages_offset: int,
                      is_json: bool,
                      file_limit: str,
                      download_path: None | str,
@@ -275,6 +279,7 @@ async def get_dialog(tg_client: TelegramClient,
         tg_client: экзепляр объекта TelegramClient
         contact_identifier: идентификатор контакта (ID, Username или имя)
         messages_limit: количество последних сообщений из переписки, которые нужно обработать
+        messages_offset: смещение от последнего сообщения
         is_json: флаг включения json формата (=true), иначе формируется таблица (=false)
         file_limit: предел размера скачиваемых файлов
         download_path: путь, куда будут сохраняться вложения
@@ -319,7 +324,7 @@ async def get_dialog(tg_client: TelegramClient,
     dialog['contact_info'] = get_contact_info(contact)
     dialog['messages'] = []
 
-    async for dialog_message in tg_client.iter_messages(contact, limit=messages_limit):
+    async for dialog_message in tg_client.iter_messages(contact, add_offset=messages_offset, limit=messages_limit):
         # Обработка возможных вложений в сообщении
         if not type(dialog_message.media).__name__ == 'MessageMediaWebPage':
             if dialog_message.media and download_path is not None:  # Есть вложение, и указан флаг -d
@@ -467,44 +472,42 @@ async def main(some_arguments: argparse.Namespace,
                some_proxy: tuple) -> None:
     logger.info('Скрипт запущен')
 
-    try:
-        # При отсутствии файла Telegram сессии скрипт прерывается
-        if os.path.exists(some_arguments.SESSION_FILE):
-            logger.info(f'Используется сессия {some_arguments.SESSION_FILE}')
-        else:
-            logger.error(f'Не найден файл сессии {some_arguments.SESSION_FILE}, используйте скрипт create_session.py')
-            exit(-1)
+    # При отсутствии файла Telegram сессии скрипт прерывается
+    if os.path.exists(some_arguments.SESSION_FILE):
+        logger.info(f'Используется сессия {some_arguments.SESSION_FILE}')
+    else:
+        logger.error(f'Не найден файл сессии {some_arguments.SESSION_FILE}, используйте скрипт create_session.py')
+        exit(-1)
 
-        # Создание экзепляра объекта TelegramClient с использованием TG API и прокси
-        # (при написании использовался TG WS Proxy, с ним всё работает, остальное не факт)
-        client = TelegramClient(some_arguments.SESSION_FILE, int(some_api_id), some_api_hash,
-                                connection=ConnectionTcpMTProxyRandomizedIntermediate,
-                                proxy=some_proxy)
+    # Создание экзепляра объекта TelegramClient с использованием TG API и прокси
+    # (при написании использовался TG WS Proxy, с ним всё работает, остальное не факт)
+    client = TelegramClient(some_arguments.SESSION_FILE, int(some_api_id), some_api_hash,
+                            connection=ConnectionTcpMTProxyRandomizedIntermediate,
+                            proxy=some_proxy)
 
-        await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
+    await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
 
-        result = await get_dialog(tg_client=client,
-                                  contact_identifier=some_arguments.CONTACT_IDENTIFIER,
-                                  messages_limit=some_arguments.LIMIT,
-                                  is_json=some_arguments.JSON,
-                                  file_limit=some_arguments.FILE_LIMIT,
-                                  download_path=some_arguments.DOWNLOADS,
-                                  timezone=some_arguments.TIMEZONE)
+    result = await get_dialog(tg_client=client,
+                              contact_identifier=some_arguments.CONTACT_IDENTIFIER,
+                              messages_limit=some_arguments.LIMIT,
+                              messages_offset=some_arguments.OFFSET,
+                              is_json=some_arguments.JSON,
+                              file_limit=some_arguments.FILE_LIMIT,
+                              download_path=some_arguments.DOWNLOADS,
+                              timezone=some_arguments.TIMEZONE)
 
         # Вывод result в консоль или в файл
-        if some_arguments.FILE_NAME:
-            file_name = some_arguments.FILE_NAME
-            result = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])').sub('', result)
-            with open(file=file_name, mode='w', encoding='utf-8') as some_file:
-                some_file.write(result)
-        else:
-            print(result)
-    except (KeyboardInterrupt, asyncio.CancelledError):
+    if some_arguments.FILE_NAME:
+        file_name = some_arguments.FILE_NAME
+        result = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])').sub('', result)
+        with open(file=file_name, mode='w', encoding='utf-8') as some_file:
+            some_file.write(result)
+    else:
+        print(result)
+
+    # Завершение соединения
+    if client:
         await client.disconnect()
-        logger.error('Скрипт прерван вручную (Ctrl-C)\n')
-        exit(-1)
-        # Завершение соединения
-    await client.disconnect()
     logger.info('Скрипт успешно завершён\n')
 
 
