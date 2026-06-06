@@ -34,6 +34,9 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
     parser.add_argument('-t',
                         type=int, default=30, dest='TIMEOUT',
                         help='Таймаут подключения в секундах (default=30)')
+    parser.add_argument('-c',
+                        action='store_true', dest='COUNT',
+                        help='Посчитать общее количество сообщений в переписке с контактом')
 
     return parser.parse_args(args_line)
 
@@ -102,7 +105,7 @@ def replace_emoji(text: str, replacement: str = "#") -> str:
     return ''.join(result)
 
 
-async def get_contacts(tg_client: TelegramClient, is_json: bool) -> str:
+async def get_contacts(tg_client: TelegramClient, is_json: bool, to_count: bool) -> str:
     """
     Получение всех контактов переданного в функцию объекта TelegramClient, полученные данные форматируются либо в
     человекочитаемую таблицу, либо в json словарь
@@ -110,6 +113,7 @@ async def get_contacts(tg_client: TelegramClient, is_json: bool) -> str:
     Args:
         tg_client: экзепляр объекта TelegramClient
         is_json: флаг включения json формата (=true), иначе формируется таблица (=false)
+        to_count: флаг включения пересчёта общего количества сообщений в переписке с контактом
     """
     contacts = {}
     # Дефолтный формат словаря contacts после завершения работы функции:
@@ -135,6 +139,11 @@ async def get_contacts(tg_client: TelegramClient, is_json: bool) -> str:
                  # Поле Name часто содержит эмодзи, они занимают пространство в два символа,
                  # и это ломает форматирование таблицы, поэтому эмодзи заменяются заглушкой
                  'Name': replace_emoji(contact.name) if contact.name else contact.name}
+
+        # Пересчёт общего количества сообщений в диалоге с контактом
+        if to_count:
+            all_messages = await tg_client.get_messages(contact, limit=0)
+            entry['Messages'] = all_messages.total
 
         contacts[contact.id] = entry
         # Путь до описания класса message, экзепляры которого итерируются в tg_client.iter_dialogs():
@@ -209,7 +218,7 @@ async def main(some_arguments: argparse.Namespace,
 
     await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
 
-    result = await get_contacts(tg_client=client, is_json=some_arguments.JSON)
+    result = await get_contacts(tg_client=client, is_json=some_arguments.JSON, to_count=some_arguments.COUNT)
 
     # Вывод result в консоль или в файл
     if some_arguments.FILE_NAME:
@@ -220,7 +229,8 @@ async def main(some_arguments: argparse.Namespace,
         print(result)
 
     # Завершение соединения
-    await client.disconnect()
+    if client:
+        await client.disconnect()
     logger.info('Скрипт успешно завершён\n')
 
 
