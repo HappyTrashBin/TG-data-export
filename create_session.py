@@ -105,7 +105,8 @@ async def create_session(tdata_folder: str,
         logger.info('При следующей попытке лучше включить флаг -r\n')
         exit(-1)
     finally:
-        await tg_client.disconnect()
+        if tg_client:
+            await tg_client.disconnect()
     logger.info(f'Создан файл сессии {session_file}')
 
 
@@ -163,7 +164,8 @@ async def main(some_arguments: argparse.Namespace,
     await connect_to_tg(tg_client=client, connection_timeout=some_arguments.TIMEOUT)
 
     # Завершение соединения
-    await client.disconnect()
+    if client:
+        await client.disconnect()
     logger.info('Скрипт успешно завершён\n')
 
 
