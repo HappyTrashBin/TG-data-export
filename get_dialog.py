@@ -16,6 +16,10 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
     Args:
         args_line: список аргументов формата ['-X', '...']
     """
+
+    def normalize_session_path(path: str) -> str:
+        return os.path.normpath(path)
+            
     parser = argparse.ArgumentParser(description='Скрипт для выгрузки переписок с контактами с аккаунта Telegram',
                                      add_help=False,
                                      formatter_class=argparse.RawTextHelpFormatter)
@@ -33,8 +37,8 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
                         type=str, dest='FILE_NAME',
                         help='Записывать результат работы скрипта в указанный файл, а не в консоль')
     parser.add_argument('-s',
-                        type=str, default='TG_Session.session', dest='SESSION_FILE',
-                        help='Путь до файла Telegram сессии (default=TG_Session.session)')
+                        type=normalize_session_path, default='TG_Session.session', dest='SESSION_FILE',
+                        help=r'Путь до файла Telegram сессии (default=.\TG_Session.session)')
     parser.add_argument('-t',
                         type=int, default=30, dest='TIMEOUT',
                         help='Таймаут подключения в секундах (default=30)')
