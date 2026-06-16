@@ -59,16 +59,17 @@ def setup_logger(in_file: bool = True, is_quiet: bool = False) -> logging.Logger
         in_file: записывать логи в файл (=true) или выводить в консоль (=false)
         is_quiet: подавить вывод (=true) или нет (=false)
     """
-    some_logger = logging.getLogger(__name__)
-    some_logger.setLevel(logging.INFO)
     if in_file:
-        info_handler = logging.FileHandler('log.txt', mode='a', encoding='utf-8')
+        handlers = [logging.FileHandler('log.txt', mode='a', encoding='utf-8')]
     else:
-        info_handler = logging.StreamHandler()
-    info_handler.setLevel(logging.INFO)
-    info_formatter = logging.Formatter('[%(asctime)s] - %(levelname)s - %(funcName)s - %(message)s')
-    info_handler.setFormatter(info_formatter)
-    some_logger.addHandler(info_handler)
+        handlers = [logging.StreamHandler()]
+
+    logging.basicConfig(format='[%(asctime)s] - %(levelname)s - %(funcName)s - %(message)s',
+                        level=logging.INFO,
+                        handlers=handlers)
+
+    some_logger = logging.getLogger(__name__)
+
     if is_quiet:
         logging.disable(logging.CRITICAL)
 
