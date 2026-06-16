@@ -147,7 +147,7 @@ async def main(some_arguments: argparse.Namespace,
 
     # Проверка наличия папки tdata
     if not os.path.exists(some_arguments.TDATA_FOLDER):
-        logger.error('Не найдена папка tdata, укажите путь до неё с помощью флага -t')
+        logger.error('Не найдена папка tdata, укажите путь до неё с помощью флага -T')
         exit(-1)
 
     # При отсутствии указанного файла Telegram сессии и отсутствии флага -r создаётся новая сессия
