@@ -16,6 +16,12 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
     Args:
         args_line: список аргументов формата ['-X', '...']
     """
+
+    def normalize_tdata_path(path: str) -> str:
+        if path[-1] == "\"":
+            path = path[:-1]
+        return os.path.normpath(path)
+            
     parser = argparse.ArgumentParser(description='Скрипт для создания файла сессии Telegram, используя только '
                                                  'содержимое папки tdata',
                                      add_help=False)
@@ -36,8 +42,8 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
                         action='store_true', dest='REWRITE',
                         help='Принудительное пересоздание файла Telegram сессии')
     parser.add_argument('-T',
-                        type=str, default='tdata', dest='TDATA_FOLDER',
-                        help='Путь до папки tdata (default=.\\tdata)')
+                        type=normalize_tdata_path, default='tdata', dest='TDATA_FOLDER',
+                        help=r'Путь до папки tdata (default=.\tdata)')
 
     return parser.parse_args(args_line)
 
