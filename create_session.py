@@ -21,6 +21,9 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
         if path[-1] == "\"":
             path = path[:-1]
         return os.path.normpath(path)
+
+    def normalize_session_path(path: str) -> str:
+        return os.path.normpath(path)
             
     parser = argparse.ArgumentParser(description='Скрипт для создания файла сессии Telegram, используя только '
                                                  'содержимое папки tdata',
@@ -33,8 +36,8 @@ def args_parse(args_line: list[str] = None) -> argparse.Namespace:
                         action='store_true', dest='QUIET',
                         help='Скрыть логи')
     parser.add_argument('-s',
-                        type=str, default='TG_Session.session', dest='SESSION_FILE',
-                        help='Путь до файла Telegram сессии (default=TG_Session.session)')
+                        type=normalize_session_path, default='TG_Session.session', dest='SESSION_FILE',
+                        help=r'Путь до файла Telegram сессии (default=.\TG_Session.session)')
     parser.add_argument('-t',
                         type=int, default=30, dest='TIMEOUT',
                         help='Таймаут подключения в секундах (default=30)')
